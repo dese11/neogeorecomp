@@ -75,6 +75,7 @@ void    io_set_inputs(const ng_input_t *in);
 int     audio_init(const uint8_t *m1, size_t m1_size, const uint8_t *sm1,
                    const uint8_t *const *vroms, const size_t *vrom_sizes, int nvrom);
 void    audio_reset(void);
+void    audio_clear_samples(void);       /* frontend reset; not a Z80 ROM switch */
 void    audio_sync(void);                /* run the Z80 up to ng_cycles */
 void    audio_command(uint8_t cmd);      /* 68k write to $320000 */
 uint8_t audio_reply(void);               /* 68k read of $320000 */
@@ -84,8 +85,10 @@ size_t  audio_take_samples(int16_t *out, size_t max_frames);  /* stereo, NG_AUDI
 void    audio_shutdown(void);
 
 /* ---- execution engine (exec.c) ---- */
-void exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only);
+int  exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only);
 void exec_reset(void);
+void exec_shutdown(void);
+void bus_shutdown(void);
 void exec_run(int64_t until);            /* run the 68000 until ng_cycles >= until */
 void exec_report(void);
 int  exec_dump_misses(const char *path);

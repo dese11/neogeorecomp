@@ -84,7 +84,8 @@ static inline ng_func_t lookup(uint32_t a) {
     return s ? *s : NULL;
 }
 
-void exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only) {
+int exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only) {
+    exec_shutdown();
     s_nbanks = bus_bank_count();
     if (s_nbanks > MAX_BANKS) s_nbanks = MAX_BANKS;
     s_tab_fixed = (ng_func_t *)calloc(0x80000, sizeof(ng_func_t));
@@ -92,6 +93,8 @@ void exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only) {
     s_tab_bios = (ng_func_t *)calloc(0x10000, sizeof(ng_func_t));
     /* one bit per word of every region: fixed, each bank, system ROM */
     s_miss_seen = (uint8_t *)calloc(((size_t)(1 + s_nbanks) * 0x80000 + 0x10000) / 8, 1);
+    if (!s_tab_fixed || !s_tab_bios || !s_miss_seen) goto fail;
+    for (int b = 0; b < s_nbanks; b++) if (!s_tab_bank[b]) goto fail;
     s_interp_only = interp_only;
     for (size_t i = 0; i < nfuncs; i++) {
         ng_func_t *s = slot_in(funcs[i].addr & 0xFFFFFF, (int)(funcs[i].addr >> 24));
@@ -99,6 +102,10 @@ void exec_init(const ng_func_entry_t *funcs, size_t nfuncs, int interp_only) {
     }
     m68k_init();
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+    return 0;
+fail:
+    exec_shutdown();
+    return -1;
 }
 
 /* ---- interrupts ---- */
@@ -447,3 +454,16 @@ unsigned int m68k_read_pcrelative_16(unsigned int a) { return m68k_read_memory_1
 unsigned int m68k_read_pcrelative_32(unsigned int a) { return m68k_read_memory_32(a); }
 unsigned int m68k_read_disassembler_16(unsigned int a) { return ng_r16(a); }
 unsigned int m68k_read_disassembler_32(unsigned int a) { return ng_r32(a); }
+
+void exec_shutdown(void) {
+    free(s_tab_fixed); s_tab_fixed = NULL;
+    free(s_tab_bios); s_tab_bios = NULL;
+    for (int b = 0; b < MAX_BANKS; b++) { free(s_tab_bank[b]); s_tab_bank[b] = NULL; }
+    free(s_miss_seen); s_miss_seen = NULL;
+    s_nbanks = 0; s_nmiss = 0;
+    s_in_musashi = s_replay = s_verify = 0;
+    s_verify_blocks = s_verify_fails = 0;
+    exec_native_blocks = exec_interp_instrs = 0;
+    s_nilog = 0; s_rp = NULL; s_rp_n = s_rp_i = 0;
+    memset(s_prof, 0, sizeof(s_prof));
+}

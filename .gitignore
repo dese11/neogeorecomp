@@ -1,4 +1,12 @@
 build/
+build-*/
+roms/
+generated/
+entries*.txt
+captures/
+profiles/
+*.so
+*.wav
 cmake-build-*/
 .vs/
 .vscode/

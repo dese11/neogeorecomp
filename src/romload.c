@@ -10,13 +10,17 @@
 
 uint8_t *ng_read_file(const char *dir, const char *name, size_t *size) {
     char path[1024];
-    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (!dir || !name || !size) return NULL;
+    *size = 0;
+    int len = snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (len < 0 || (size_t)len >= sizeof(path)) return NULL;
     FILE *f = fopen(path, "rb");
     if (!f) { fprintf(stderr, "error: cannot open %s\n", path); return NULL; }
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return NULL; }
     long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    if (n <= 0 || fseek(f, 0, SEEK_SET)) { fclose(f); return NULL; }
     uint8_t *buf = (uint8_t *)malloc((size_t)n);
+    if (!buf) { fclose(f); return NULL; }
     if (fread(buf, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(buf); return NULL; }
     fclose(f);
     *size = (size_t)n;
@@ -29,6 +33,7 @@ void ng_swap16(uint8_t *p, size_t n) {
 
 uint8_t *ng_load_prom(const char *dir, const ng_game_t *g) {
     uint8_t *prom = (uint8_t *)calloc(1, g->prom_size);
+    if (!prom) return NULL;
     for (int i = 0; i < NG_MAX_PARTS && g->prom[i].file; i++) {
         const ng_rom_part_t *p = &g->prom[i];
         size_t size;
@@ -49,6 +54,7 @@ uint8_t *ng_load_prom(const char *dir, const ng_game_t *g) {
  * them byte-interleaved (even byte from the first file). */
 uint8_t *ng_load_crom(const char *dir, const ng_game_t *g) {
     uint8_t *crom = (uint8_t *)calloc(1, g->crom_size);
+    if (!crom) return NULL;
     size_t at = 0;
     for (int i = 0; i < NG_MAX_PARTS && g->crom_pairs[i][0]; i++) {
         size_t s0, s1;
@@ -60,6 +66,10 @@ uint8_t *ng_load_crom(const char *dir, const ng_game_t *g) {
         for (size_t k = 0; k < s0; k++) { crom[at + 2 * k] = a[k]; crom[at + 2 * k + 1] = b[k]; }
         at += s0 * 2;
         free(a); free(b);
+    }
+    if (at != g->crom_size) {
+        fprintf(stderr, "error: sprite ROM set does not fill the expected region\n");
+        free(crom); return NULL;
     }
     return crom;
 }

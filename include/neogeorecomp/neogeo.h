@@ -3,8 +3,8 @@
  *
  * A game repo supplies an ng_game_t (its ROM layout) and the table of
  * recompiled routines that tools/m68krecomp generated from the user's own
- * dump, then hands both to ng_main(), which owns the command line, ROM
- * loading, the frame loop, video/audio output and input.
+ * dump, then hands both to ng_main() for SDL/headless execution, or to
+ * the host-neutral lifecycle in <neogeorecomp/runtime.h>.
  */
 #ifndef NEOGEORECOMP_NEOGEO_H
 #define NEOGEORECOMP_NEOGEO_H
@@ -82,6 +82,8 @@ typedef struct {
      * can fill the margins of screens drawn for 320 pixels from its own
      * graphics. Copies change only the picture, never VRAM. */
     int (*extend)(const uint16_t *vram, int screen_w, ng_extra_sprite_t *out, int max);
+    /* Optional: release host-owned game assets on unload, including failed loads. */
+    void (*unload)(void);
 } ng_game_t;
 
 /* Controller state for one frame. Bits are active-high here; io.c inverts. */

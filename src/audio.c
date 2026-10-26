@@ -38,6 +38,7 @@ static int64_t s_z80_clock;         /* Z80 clocks executed, tracks ng_cycles / 3
 /* Synthesis (ym2610.cpp): one stereo sample per 72 Z80 clocks (8 MHz / 144). */
 void    ym2610_init(const uint8_t *const *vroms, const size_t *sizes, int n);
 void    ym2610_reset(void);
+void    ym2610_shutdown(void);
 void    ym2610_write(int port, uint8_t v);
 uint8_t ym2610_read(int port);
 void    ym2610_generate(int16_t *out, size_t n);
@@ -190,6 +191,7 @@ static void z_out(z80 *z, uint8_t port, uint8_t v) {
 /* ---- interface to the 68k side ---- */
 
 void audio_reset(void) {
+    s_cmd = s_reply = 0;
     z80_init(&s_z);
     s_z.read_byte = z_read;
     s_z.write_byte = z_write;
@@ -207,8 +209,11 @@ void audio_reset(void) {
     s_samples_done = s_z80_clock / SAMPLE_CLOCKS;
 }
 
+void audio_clear_samples(void) { s_ring_head = s_ring_count = 0; }
+
 int audio_init(const uint8_t *m1, size_t m1_size, const uint8_t *sm1,
                const uint8_t *const *vroms, const size_t *vrom_sizes, int nvrom) {
+    s_use_bios_rom = 1;
     ym2610_init(vroms, vrom_sizes, nvrom);
     s_m1 = m1; s_m1_size = m1_size; s_sm1 = sm1;
     s_cmd = 0; s_reply = 0;
@@ -262,4 +267,9 @@ size_t audio_take_samples(int16_t *out, size_t max_frames) {
     return n;
 }
 
-void audio_shutdown(void) {}
+void audio_shutdown(void) {
+    ym2610_shutdown();
+    s_m1 = s_sm1 = NULL; s_m1_size = 0;
+    s_ring_head = s_ring_count = 0;
+    s_use_bios_rom = 1;
+}

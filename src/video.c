@@ -81,6 +81,7 @@ void pal_select_bank(int bank) { s_pal_bank = bank & 1; }
 static void decode_sprites(const uint8_t *crom, size_t size) {
     size_t tiles = size / 128;
     s_spr = (uint8_t *)malloc(tiles * 256);
+    if (!s_spr) return;
     for (size_t t = 0; t < tiles; t++) {
         const uint8_t *src = crom + t * 128;
         uint8_t *dst = s_spr + t * 256;
@@ -107,6 +108,7 @@ static uint8_t *decode_fix(const uint8_t *rom, size_t size) {
     static const int col_off[4] = {0x10, 0x18, 0x00, 0x08};
     size_t tiles = size / 32;
     uint8_t *out = (uint8_t *)malloc(tiles * 64);
+    if (!out) return NULL;
     for (size_t t = 0; t < tiles; t++)
         for (int y = 0; y < 8; y++)
             for (int p = 0; p < 4; p++) {
@@ -123,6 +125,9 @@ int video_load(const uint8_t *crom, size_t crom_size, const uint8_t *srom, size_
     s_fix_cart = decode_fix(srom, srom_size);
     s_fix_cart_tiles = srom_size / 32;
     s_fix_bios = decode_fix(sfix, 0x20000);
+    if (!s_spr || !s_fix_cart || !s_fix_bios) return -1;
+    memset(s_palram, 0, sizeof(s_palram));
+    s_pal_bank = 0;
     memcpy(s_zoom_rom, zoom_rom, sizeof(s_zoom_rom));
     for (int b = 0; b < 2; b++)
         for (int i = 0; i < 0x1000; i++) s_pens[b][i] = color_to_argb(0);

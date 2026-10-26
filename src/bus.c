@@ -81,6 +81,9 @@ void bus_set_backup_lock(int locked) {
 }
 
 void bus_init(const ng_board_t *board) {
+    s_logging = 0;
+    memset(s_wram, 0, sizeof(s_wram));
+    memset(s_backup, 0, sizeof(s_backup));
     s_board = *board;
     memset(ng_rmap, 0, sizeof(ng_rmap));
     memset(ng_wmap, 0, sizeof(ng_wmap));
@@ -229,4 +232,14 @@ void ng_w16_slow(uint32_t a, uint16_t v) {
     uint8_t *p = s_real_w[a >> 16];
     if (p) { p[a & 0xFFFF] = (uint8_t)(v >> 8); p[(a & 0xFFFF) + 1] = (uint8_t)v; }
     else dev_w16(a, v);
+}
+
+void bus_shutdown(void) {
+    memset(ng_rmap, 0, sizeof(ng_rmap));
+    memset(ng_wmap, 0, sizeof(ng_wmap));
+    memset(s_real_r, 0, sizeof(s_real_r));
+    memset(s_real_w, 0, sizeof(s_real_w));
+    memset(&s_board, 0, sizeof(s_board));
+    s_logging = 0;
+    free(s_log); s_log = NULL; s_nlog = s_caplog = 0;
 }

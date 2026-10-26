@@ -1,24 +1,16 @@
 /*
- * neogeo.c — ng_main(): command line, ROM loading, and the frame loop.
- *
- * A frame is 264 lines of 768 68k clocks. The loop runs the CPU to the
- * start of each line, renders visible lines as they are reached, raises
- * VBlank (IRQ1) at line 240 pixel $11F, and services the LSPC timer
- * whenever its deadline falls inside the slice.
+ * neogeo.c — ng_main(): SDL/headless command line and host frame loop.
+ * Board ownership and scanline timing live in runtime.c.
  *
  * Input comes from the window, or from an --input script so headless runs
  * are reproducible: `<frame>[-<end>] <button>[+<button>...]`, one per line.
  */
 #include "ng_internal.h"
 #include <neogeorecomp/bus.h>
-#include "romload.h"
+#include <neogeorecomp/runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-int64_t ng_frame_start;
-
-static uint32_t s_fb[NG_MAX_SCREEN_W * NG_SCREEN_H];
 
 /* ---- options ---- */
 
@@ -165,49 +157,6 @@ static void script_input(long frame, ng_input_t *in) {
     }
 }
 
-/* ---- frame loop ---- */
-
-static void run_until(int64_t t) {
-    while (ng_cycles < t) {
-        int64_t target = t, d = lspc_timer_deadline();
-        if (d < target) target = d;
-        if (target > ng_cycles) exec_run(target);
-        if (ng_cycles >= lspc_timer_deadline()) lspc_timer_fire();
-    }
-}
-
-static void run_frame(void) {
-    int64_t fs = ng_frame_start;
-    for (int line = 0; line < NG_LINES_PER_FRAME; line++) {
-        int64_t ls = fs + (int64_t)line * NG_CLOCKS_PER_LINE;
-        run_until(ls);
-        if (line >= NG_FIRST_VISIBLE && line < NG_VBLANK_LINE)
-            video_render_line(line - NG_FIRST_VISIBLE, s_fb + (line - NG_FIRST_VISIBLE) * ng_screen_w);
-        if (line == NG_VBLANK_LINE) {
-            run_until(ls + NG_VBLANK_HPOS * 2);
-            lspc_vblank();
-        }
-    }
-    ng_frame_start = fs + NG_CLOCKS_PER_FRAME;
-    run_until(ng_frame_start);
-    audio_sync();
-}
-
-static int s_mvs = 1;
-
-static void power_on(void) {
-    ng_cycles = 0;
-    ng_frame_start = 0;
-    bus_reset();
-    lspc_reset();
-    pal_select_bank(0);
-    video_set_fix_bios(s_mvs);
-    audio_select_bios_rom(s_mvs);
-    audio_reset();
-    exec_reset();
-    ng_irq_pending = 4;        /* IRQ3 is asserted at power-on until the BIOS acks it */
-}
-
 int ng_main(int argc, char **argv, const ng_game_t *game,
             const ng_func_entry_t *funcs, size_t nfuncs) {
     options_t o;
@@ -222,75 +171,43 @@ int ng_main(int argc, char **argv, const ng_game_t *game,
     }
     if (!o.bios_name) o.bios_name = game->bios ? game->bios : "sp-s2.sp1";
 
-    size_t sz, bios_sz, sfix_sz, sm1_sz, lo_sz, srom_sz, m1_sz;
-    uint8_t *prom = ng_load_prom(o.rom_path, game);
-    uint8_t *bios = ng_read_file(o.bios_path, o.bios_name, &bios_sz);
-    uint8_t *sfix = ng_read_file(o.bios_path, "sfix.sfix", &sfix_sz);
-    uint8_t *sm1 = ng_read_file(o.bios_path, "sm1.sm1", &sm1_sz);
-    uint8_t *lo = ng_read_file(o.bios_path, "000-lo.lo", &lo_sz);
-    uint8_t *crom = ng_load_crom(o.rom_path, game);
-    uint8_t *srom = ng_read_file(o.rom_path, game->srom, &srom_sz);
-    uint8_t *m1 = ng_read_file(o.rom_path, game->m1, &m1_sz);
-    if (!prom || !bios || !sfix || !sm1 || !lo || !crom || !srom || !m1) {
-        fprintf(stderr, "error: missing ROM files; see docs/running.md for the expected set\n");
+    ng_runtime_options_t runtime = {
+        .rom_path = o.rom_path, .bios_path = o.bios_path, .bios_name = o.bios_name,
+        .screen_width = ng_screen_w, .interpreter_only = o.interp, .verify = o.verify
+    };
+    if (ng_runtime_load(game, funcs, nfuncs, &runtime)) {
+        free(s_script); s_script = NULL; s_nscript = 0;
         return 1;
     }
-    if (bios_sz < 0x20000) { fprintf(stderr, "error: %s is not a 128 KB system ROM\n", o.bios_name); return 1; }
-    ng_swap16(bios, 0x20000);
-    (void)sz;
-
-    const uint8_t *vroms[NG_MAX_PARTS];
-    size_t vsizes[NG_MAX_PARTS];
-    int nv = 0;
-    for (; nv < NG_MAX_PARTS && game->vrom[nv]; nv++) {
-        uint8_t *v = ng_read_file(o.rom_path, game->vrom[nv], &vsizes[nv]);
-        if (!v) return 1;
-        vroms[nv] = v;
-    }
-
-    if (game->patch) game->patch(prom, game->prom_size, ng_screen_w);
-    s_mvs = !game->aes;
-    ng_board_t board = {prom, game->prom_size, bios, s_mvs};
-    bus_init(&board);
-    io_reset(s_mvs);
-    video_load(crom, game->crom_size, srom, srom_sz, sfix, lo);
-    if (ng_screen_w > NG_SCREEN_W) video_set_extend(game->extend);
-    free(crom);
-    audio_init(m1, m1_sz, sm1, vroms, vsizes, nv);
-    exec_init(funcs, nfuncs, o.interp || nfuncs == 0);
-    exec_set_verify(o.verify);
-    if (platform_init(game->title, o.scale, o.headless, o.record)) return 1;
+    int result = 1;
+    if (platform_init(game->title, o.scale, o.headless, o.record)) goto cleanup;
     if (o.mute) platform_mute();
-    if (o.wav && platform_wav(o.wav)) return 1;
-
-    fprintf(stderr, "[neogeorecomp] %s: %zu recompiled entry points%s\n", game->name, nfuncs,
-            (o.interp || nfuncs == 0) ? ", interpreter only" : "");
-    power_on();
-
-    static int16_t samples[4096 * 2];
+    if (o.wav && platform_wav(o.wav)) goto cleanup;
+    ng_runtime_frame_t output = {0};
     for (long frame = 0; o.frames < 0 || frame < o.frames; frame++) {
         ng_input_t in;
         memset(&in, 0, sizeof(in));
-        if (!platform_frame(frame == 0 ? NULL : s_fb, &in)) break;
-        if (window_take_reset()) power_on();
+        if (!platform_frame(output.pixels, &in)) break;
+        if (window_take_reset()) ng_runtime_reset();
         script_input(frame, &in);
-        io_set_inputs(&in);
-        run_frame();
-        platform_audio(samples, audio_take_samples(samples, 4096));
+        if (ng_runtime_run_frame(&in, &output)) goto cleanup;
+        platform_audio(output.audio, output.audio_frames);
         for (int i = 0; i < o.nshots; i++)
             if (o.shots[i].frame == frame) {
-                if (write_png(o.shots[i].path, s_fb, ng_screen_w, NG_SCREEN_H))
+                if (write_png(o.shots[i].path, output.pixels, (int)output.width, (int)output.height))
                     fprintf(stderr, "error: cannot write %s\n", o.shots[i].path);
                 else
                     fprintf(stderr, "[neogeorecomp] frame %ld -> %s\n", frame, o.shots[i].path);
             }
     }
-    platform_frame(s_fb, &(ng_input_t){0});
+    platform_frame(output.pixels, &(ng_input_t){0});
 
     exec_report();
     if (o.dump_misses) exec_dump_misses(o.dump_misses);
+    result = 0;
+cleanup:
     platform_shutdown();
-    video_shutdown();
-    audio_shutdown();
-    return 0;
+    ng_runtime_unload();
+    free(s_script); s_script = NULL; s_nscript = 0;
+    return result;
 }

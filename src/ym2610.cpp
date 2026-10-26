@@ -46,6 +46,10 @@ void ym2610_init(const uint8_t *const *vroms, const size_t *sizes, int n) {
     s_chip->chip.reset();
 }
 
+void ym2610_shutdown(void) {
+    delete s_chip; s_chip = nullptr;
+}
+
 void ym2610_reset(void) {
     if (s_chip) s_chip->chip.reset();
 }

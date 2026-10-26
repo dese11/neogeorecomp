@@ -69,12 +69,13 @@ add_library(ymfm STATIC
     ${NG_EXT}/ymfm/src/ymfm_misc.cpp)
 target_include_directories(ymfm SYSTEM PUBLIC ${NG_EXT}/ymfm/src)
 
-# ---- runtime ----
-# SDL2 provides the window; without it the runtime builds headless-only.
+# ---- host-neutral runtime and optional SDL frontend ----
+# SDL2 only belongs to neogeorecomp, never to neogeorecomp_runtime.
 find_package(SDL2 CONFIG QUIET)
 
-add_library(neogeorecomp STATIC
-    src/neogeo.c
+add_library(neogeorecomp_runtime STATIC
+    src/runtime.c
+    src/image.c
     src/exec.c
     src/cpu.c
     src/bus.c
@@ -83,12 +84,18 @@ add_library(neogeorecomp STATIC
     src/io.c
     src/audio.c
     src/ym2610.cpp
-    src/platform.c
     src/romload.c)
-target_include_directories(neogeorecomp
+target_include_directories(neogeorecomp_runtime
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${NG_EXT}/stb ${NG_EXT}/font8x8)
-target_link_libraries(neogeorecomp PUBLIC musashi z80core ymfm)
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${NG_EXT}/stb)
+target_link_libraries(neogeorecomp_runtime PUBLIC musashi z80core ymfm)
+foreach(lib musashi z80core ymfm neogeorecomp_runtime)
+    set_target_properties(${lib} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endforeach()
+
+add_library(neogeorecomp STATIC src/neogeo.c src/platform.c)
+target_include_directories(neogeorecomp PRIVATE src ${NG_EXT}/font8x8)
+target_link_libraries(neogeorecomp PUBLIC neogeorecomp_runtime)
 if(TARGET SDL2::SDL2)
     # Visible to the game's CMakeLists too, so it can ship the DLL.
     set_target_properties(SDL2::SDL2 PROPERTIES IMPORTED_GLOBAL TRUE)
@@ -101,8 +108,11 @@ endif()
 if(MSVC)
     target_compile_definitions(neogeorecomp PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_options(neogeorecomp PRIVATE /W3)
+    target_compile_options(neogeorecomp_runtime PRIVATE /W3)
+    target_compile_definitions(neogeorecomp_runtime PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(neogeorecomp PRIVATE -Wall -Wextra)
+    target_compile_options(neogeorecomp_runtime PRIVATE -Wall -Wextra)
 endif()
 
 # ---- m68krecomp: the recompiler, linked into each game's generator ----
