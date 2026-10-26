@@ -1,6 +1,7 @@
 /* Board ownership and the scanline scheduler, independent of the frontend. */
 #include "ng_internal.h"
 #include "romload.h"
+#include "ast.h"
 #include <neogeorecomp/bus.h>
 #include <neogeorecomp/runtime.h>
 #include <stdio.h>
@@ -18,6 +19,7 @@ static struct {
 } s_board;
 
 void ng_runtime_unload(void) {
+    ast_close();
     video_set_extend(NULL);
     exec_shutdown();
     bus_shutdown();
@@ -38,6 +40,7 @@ void ng_runtime_unload(void) {
 
 void ng_runtime_reset(void) {
     if (!s_board.loaded) return;
+    ast_reset();
     ng_cycles = ng_frame_start = 0;
     memset(s_fb, 0, sizeof(s_fb));
     memset(s_samples, 0, sizeof(s_samples));
@@ -99,6 +102,7 @@ int ng_runtime_load(const ng_game_t *game, const ng_func_entry_t *funcs,
     video_set_extend(width > NG_SCREEN_W ? game->extend : NULL);
     free(s_board.crom); s_board.crom = NULL;
     if (audio_init(s_board.m1, m1_sz, s_board.sm1, vroms, vsizes, nv)) goto fail;
+    if (ast_open(o->soundtrack_path, game->name, s_board.m1, m1_sz, o->soundtrack_volume)) goto fail;
     if (exec_init(funcs, nfuncs, o->interpreter_only || !nfuncs)) goto fail;
     exec_set_verify(o->verify);
     s_board.loaded = 1;

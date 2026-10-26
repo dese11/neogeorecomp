@@ -75,6 +75,7 @@ find_package(SDL2 CONFIG QUIET)
 
 add_library(neogeorecomp_runtime STATIC
     src/runtime.c
+    src/ast.c
     src/image.c
     src/exec.c
     src/cpu.c

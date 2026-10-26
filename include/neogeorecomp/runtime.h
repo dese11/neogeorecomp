@@ -19,6 +19,8 @@ typedef struct {
     int screen_width;          /* 0: 320; otherwise even, 320..496; reload to change */
     int interpreter_only;
     int verify;
+    const char *soundtrack_path; /* NULL: original YM2610 music; local AST pack otherwise */
+    unsigned soundtrack_volume; /* 0..100; zero mutes external music */
 } ng_runtime_options_t;
 
 typedef struct {

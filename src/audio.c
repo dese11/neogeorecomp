@@ -20,6 +20,7 @@
  * right sample, and the frame loop takes them at the end of each frame.
  */
 #include "ng_internal.h"
+#include "ast.h"
 #include <neogeorecomp/cpu.h>
 #include "z80.h"
 #include <string.h>
@@ -32,6 +33,8 @@ static int s_use_bios_rom = 1;
 static uint8_t s_ram[0x800];
 static uint32_t s_bank[4];          /* byte offsets for $F000, $E000, $C000, $8000 */
 static uint8_t s_cmd, s_reply;
+static int s_ast_reply;
+static uint8_t s_ast_echo;
 static int s_nmi_enabled, s_nmi_pending, s_nmi_line;
 static int64_t s_z80_clock;         /* Z80 clocks executed, tracks ng_cycles / 3 */
 
@@ -55,6 +58,7 @@ static void generate_to_now(void) {
         size_t n = (size_t)(target - s_samples_done), tail = (s_ring_head + s_ring_count) % RING;
         if (n > RING - tail) n = RING - tail;
         ym2610_generate(s_ring + tail * 2, n);
+        ast_mix(s_ring + tail * 2, n);
         s_samples_done += (int64_t)n;
         s_ring_count += n;
         if (s_ring_count > RING) {   /* nobody is taking them: keep the newest */
@@ -183,7 +187,10 @@ static void z_out(z80 *z, uint8_t port, uint8_t v) {
         ym2610_write(port & 3, v);
         break;
     case 0x08: s_nmi_enabled = !(port & 0x10); update_nmi(); break;
-    case 0x0C: s_reply = v; break;
+    case 0x0C:
+        if (s_ast_reply && v == 0x20) { s_reply=s_ast_echo; s_ast_reply=0; }
+        else s_reply=v;
+        break;
     default: break;
     }
 }
@@ -192,6 +199,7 @@ static void z_out(z80 *z, uint8_t port, uint8_t v) {
 
 void audio_reset(void) {
     s_cmd = s_reply = 0;
+    s_ast_reply = 0;
     z80_init(&s_z);
     s_z.read_byte = z_read;
     s_z.write_byte = z_write;
@@ -234,6 +242,16 @@ void audio_sync(void) {
 
 void audio_command(uint8_t cmd) {
     audio_sync();
+    s_ast_reply = 0;
+    if (!s_use_bios_rom && ast_enabled()) {
+        generate_to_now();
+        if (ast_command(cmd)) {
+            s_ast_reply = 1; s_ast_echo = cmd;
+            /* Stop the previous native song through its own driver, keeping
+             * voices/effects and the original command echo intact. */
+            cmd = 0x20;
+        }
+    }
     s_cmd = cmd;
     s_nmi_pending = 1;
     update_nmi();
@@ -248,6 +266,7 @@ void audio_select_bios_rom(int bios) {
     if (bios == s_use_bios_rom) return;
     audio_sync();
     s_use_bios_rom = bios;
+    if (bios) ast_reset();
     /* Swapping the Z80's ROM restarts it, so the newly selected driver
      * boots from its own reset vector. */
     uint8_t cmd = s_cmd, reply = s_reply;

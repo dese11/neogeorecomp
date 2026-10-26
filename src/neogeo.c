@@ -16,8 +16,9 @@
 
 #define MAX_SHOTS 64
 typedef struct {
-    const char *rom_path, *bios_path, *record, *input, *dump_misses, *bios_name, *wav;
-    int headless, interp, verify, scale, mute, width_set;
+    const char *rom_path, *bios_path, *record, *input, *dump_misses, *bios_name, *wav, *ast_path;
+    int headless, interp, verify, scale, mute, width_set, ast_mode;
+    unsigned ast_volume;
     long frames;
     struct { long frame; const char *path; } shots[MAX_SHOTS];
     int nshots;
@@ -41,12 +42,15 @@ static void usage(const char *prog) {
         "  --width N             output width, 320-%d: margins show what lies just off screen\n"
         "  --widescreen          --width 400 (16:9 with square pixels)\n"
         "  --wav FILE            write the audio to a WAV file\n"
+        "  --ast-path DIR        replace music using a local Neo Geo CD AST pack\n"
+        "  --soundtrack MODE     original or ast (default: AST when --ast-path is set)\n"
+        "  --ast-volume N        AST volume, 0-100 (default 70)\n"
         "  --mute                no sound from the window\n", prog, NG_MAX_SCREEN_W);
 }
 
 static int parse_args(int argc, char **argv, options_t *o) {
     memset(o, 0, sizeof(*o));
-    o->rom_path = "roms"; o->scale = 3; o->frames = -1;
+    o->rom_path = "roms"; o->scale = 3; o->frames = -1; o->ast_volume = 70; o->ast_mode = -1;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *next = i + 1 < argc ? argv[i + 1] : NULL;
@@ -64,6 +68,18 @@ static int parse_args(int argc, char **argv, options_t *o) {
         else if (!strcmp(a, "--width") && next) { ng_screen_w = atoi(next); o->width_set = 1; i++; }
         else if (!strcmp(a, "--widescreen")) { ng_screen_w = 400; o->width_set = 1; }
         else if (!strcmp(a, "--wav") && next) { o->wav = next; i++; }
+        else if (!strcmp(a, "--ast-path") && next) { o->ast_path = next; i++; }
+        else if (!strcmp(a, "--soundtrack") && next) {
+            if (!strcmp(next,"original")) o->ast_mode=0;
+            else if (!strcmp(next,"ast")) o->ast_mode=1;
+            else { usage(argv[0]); return -1; }
+            i++;
+        }
+        else if (!strcmp(a, "--ast-volume") && next) {
+            char *end; long v = strtol(next, &end, 10);
+            if (!*next || *end || v < 0 || v > 100) { usage(argv[0]); return -1; }
+            o->ast_volume = (unsigned)v; i++;
+        }
         else if (!strcmp(a, "--mute")) o->mute = 1;
         else if (!strcmp(a, "--screenshot") && next) {
             const char *colon = strchr(next, ':');
@@ -76,6 +92,10 @@ static int parse_args(int argc, char **argv, options_t *o) {
         else { usage(argv[0]); return -1; }
     }
     if (!o->bios_path) o->bios_path = o->rom_path;
+    if (o->ast_mode == 1 && !o->ast_path) {
+        fprintf(stderr,"error: --soundtrack ast requires --ast-path DIR\n");
+        return -1;
+    }
     /* even, so both margins are equal */
     if (ng_screen_w < NG_SCREEN_W || ng_screen_w > NG_MAX_SCREEN_W || (ng_screen_w & 1)) {
         fprintf(stderr, "error: --width must be an even number from %d to %d\n", NG_SCREEN_W, NG_MAX_SCREEN_W);
@@ -173,7 +193,8 @@ int ng_main(int argc, char **argv, const ng_game_t *game,
 
     ng_runtime_options_t runtime = {
         .rom_path = o.rom_path, .bios_path = o.bios_path, .bios_name = o.bios_name,
-        .screen_width = ng_screen_w, .interpreter_only = o.interp, .verify = o.verify
+        .screen_width = ng_screen_w, .interpreter_only = o.interp, .verify = o.verify,
+        .soundtrack_path = o.ast_mode == 0 ? NULL : o.ast_path, .soundtrack_volume = o.ast_volume
     };
     if (ng_runtime_load(game, funcs, nfuncs, &runtime)) {
         free(s_script); s_script = NULL; s_nscript = 0;
