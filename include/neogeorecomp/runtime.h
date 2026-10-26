@@ -35,6 +35,8 @@ int ng_runtime_load(const ng_game_t *game, const ng_func_entry_t *funcs,
                     size_t nfuncs, const ng_runtime_options_t *options);
 int ng_runtime_run_frame(const ng_input_t *input, ng_runtime_frame_t *output);
 void ng_runtime_reset(void);
+/* Live AST gain only; soundtrack selection and geometry require a reload. */
+void ng_runtime_set_soundtrack_volume(unsigned volume);
 void ng_runtime_unload(void);  /* safe after errors and repeated calls */
 void ng_runtime_counters(uint64_t *native_blocks, uint64_t *interpreted_instructions);
 

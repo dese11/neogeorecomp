@@ -38,6 +38,8 @@ void ng_runtime_unload(void) {
     io_reset(1);
 }
 
+void ng_runtime_set_soundtrack_volume(unsigned volume) { ast_set_volume(volume); }
+
 void ng_runtime_reset(void) {
     if (!s_board.loaded) return;
     ast_reset();

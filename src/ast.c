@@ -76,6 +76,7 @@ void ast_close(void) {
     memset(s_tracks,0,sizeof(s_tracks));
     memset(s_native,0,sizeof(s_native)); memset(s_args,0,sizeof(s_args));
 }
+void ast_set_volume(unsigned volume) { if (volume<=100) s_volume=volume; }
 int ast_enabled(void) { return s_enabled; }
 unsigned ast_current_track(void) { return s_track<0 ? 0 : s_tracks[s_track].number; }
 
