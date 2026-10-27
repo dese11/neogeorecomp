@@ -13,7 +13,7 @@
 #include "ng_internal.h"
 #include <neogeorecomp/bus.h>
 #include <string.h>
-#include <time.h>
+
 
 static ng_input_t s_in;
 static int s_mvs;
@@ -35,17 +35,27 @@ static struct {
 static uint8_t bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
 
 static uint64_t rtc_now(void) {
-    time_t t = time(NULL);
-    struct tm tmv;
-#ifdef _WIN32
-    localtime_s(&tmv, &t);
-#else
-    localtime_r(&t, &tmv);
-#endif
-    return (uint64_t)bcd(tmv.tm_sec) | ((uint64_t)bcd(tmv.tm_min) << 8) |
-           ((uint64_t)bcd(tmv.tm_hour) << 16) | ((uint64_t)bcd(tmv.tm_mday) << 24) |
-           ((uint64_t)(tmv.tm_wday & 0xF) << 32) | ((uint64_t)((tmv.tm_mon + 1) & 0xF) << 36) |
-           ((uint64_t)bcd(tmv.tm_year % 100) << 40);
+    /* Fixed epoch, 2000-01-01 UTC (Saturday), advanced only by emulated clocks.
+     * The host wall clock is never an unrecorded input during rollback. */
+    uint64_t seconds=(uint64_t)ng_cycles/12000000;
+    unsigned sec=seconds%60, min=(seconds/60)%60, hour=(seconds/3600)%24;
+    uint64_t days=seconds/86400, remaining=days;
+    int year=2000, month=1;
+    for (;;) {
+        int leap=year%4==0 && (year%100!=0 || year%400==0);
+        unsigned n=365+leap;
+        if (remaining<n) break;
+        remaining-=n; year++;
+    }
+    static const unsigned lengths[]={31,28,31,30,31,30,31,31,30,31,30,31};
+    for (;month<12;month++) {
+        unsigned n=lengths[month-1]+(month==2 && year%4==0 && (year%100!=0 || year%400==0));
+        if (remaining<n) break;
+        remaining-=n;
+    }
+    return (uint64_t)bcd(sec) | ((uint64_t)bcd(min)<<8) | ((uint64_t)bcd(hour)<<16) |
+           ((uint64_t)bcd((int)remaining+1)<<24) | (((days+6)%7)<<32) |
+           ((uint64_t)month<<36) | ((uint64_t)bcd(year%100)<<40);
 }
 
 static void rtc_exec(uint8_t c) {
@@ -151,4 +161,17 @@ void io_write8(uint32_t a, uint8_t v) {
     case 0x3A0000: if (a & 1) system_latch(a); break;
     default: break;
     }
+}
+
+#include "state.h"
+
+void io_state(ng_state_t *s) {
+    ngs_u8(s,&s_in.p1); ngs_u8(s,&s_in.p2);
+    ngs_u8(s,&s_in.start1); ngs_u8(s,&s_in.start2); ngs_u8(s,&s_in.select1); ngs_u8(s,&s_in.select2);
+    ngs_u8(s,&s_in.coin1); ngs_u8(s,&s_in.coin2); ngs_u8(s,&s_in.service); ngs_u8(s,&s_in.test);
+    int mvs=ngs_int(s,&s_mvs); ngs_require(s,mvs==0 || mvs==1);
+    int din=ngs_int(s,&s_rtc.din), clk=ngs_int(s,&s_rtc.clk), stb=ngs_int(s,&s_rtc.stb);
+    ngs_require(s,din>=0 && din<=1 && clk>=0 && clk<=1 && stb>=0 && stb<=1);
+    ngs_u8(s,&s_rtc.cmd_shift); ngs_u8(s,&s_rtc.mode); ngs_u64(s,&s_rtc.reg);
+    ngs_require(s,ngs_i64(s,&s_rtc.tp_half)>0);
 }

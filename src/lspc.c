@@ -118,3 +118,13 @@ void lspc_write(uint32_t addr, uint16_t v) {
     case 0xE: break;   /* TIMERSTOP only matters on PAL boards */
     }
 }
+
+#include "state.h"
+
+void lspc_state(ng_state_t *s) {
+    for (size_t i=0;i<0x10000;i++) ngs_u16(s,&lspc_vram[i]);
+    ngs_u8(s,&lspc_anim_counter); ngs_u16(s,&s_addr); ngs_u16(s,&s_mod);
+    ngs_u8(s,&s_anim_speed); ngs_u8(s,&s_anim_frames); ngs_u8(s,&s_anim_disabled);
+    ngs_u8(s,&s_timer_ctrl); ngs_u32(s,&s_timer_reload);
+    ngs_require(s,ngs_i64(s,&s_timer_deadline)>=0);
+}

@@ -467,3 +467,22 @@ void exec_shutdown(void) {
     s_nilog = 0; s_rp = NULL; s_rp_n = s_rp_i = 0;
     memset(s_prof, 0, sizeof(s_prof));
 }
+
+#include "state.h"
+
+void exec_state(ng_state_t *s) {
+    for (int i=0;i<8;i++) ngs_u32(s,&CPU.d[i]);
+    for (int i=0;i<8;i++) ngs_u32(s,&CPU.a[i]);
+    ngs_u32(s,&CPU.osp); ngs_u32(s,&CPU.pc);
+    ngs_require(s,ngs_u8(s,&CPU.x)<=1); ngs_require(s,ngs_u8(s,&CPU.n)<=1);
+    ngs_require(s,ngs_u8(s,&CPU.z)<=1); ngs_require(s,ngs_u8(s,&CPU.v)<=1);
+    ngs_require(s,ngs_u8(s,&CPU.c)<=1); ngs_require(s,ngs_u8(s,&CPU.s)<=1);
+    ngs_require(s,ngs_u8(s,&CPU.t)<=1); ngs_require(s,ngs_u8(s,&CPU.ipl)<=7);
+    ngs_require(s,ngs_u8(s,&CPU.stopped)<=1);
+    unsigned int internal[10]; mus_state(internal,0);
+    for (int i=0;i<10;i++) { uint32_t v=internal[i]; ngs_u32(s,&v); internal[i]=v; }
+    if (s->mode==NGS_READ && !s->error) mus_state(internal,1);
+    /* Dispatch/miss/profile tables and counters are diagnostics/immutable data.
+     * ng_next_event is recomputed by exec_run; no host stack survives a frame. */
+    ngs_require(s,!s_in_musashi && !s_replay);
+}

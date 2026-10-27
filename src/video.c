@@ -296,3 +296,15 @@ void video_render_line(int line, uint32_t *row) {
     draw_sprites(scanline, row);
     draw_fix(scanline, row);
 }
+
+#include "state.h"
+
+void video_state(ng_state_t *s) {
+    for (int b=0;b<2;b++) for (int i=0;i<0x1000;i++) ngs_u16(s,&s_palram[b][i]);
+    int bank=ngs_int(s,&s_pal_bank), fix=ngs_int(s,&s_fix_use_bios);
+    ngs_require(s,bank>=0 && bank<=1 && fix>=0 && fix<=1);
+    if (s->mode==NGS_READ && !s->error) {
+        for (int b=0;b<2;b++) for (int i=0;i<0x1000;i++) s_pens[b][i]=color_to_argb(s_palram[b][i]);
+        memset(s_extra,0,sizeof(s_extra)); memset(s_extra_at,0,sizeof(s_extra_at));
+    }
+}

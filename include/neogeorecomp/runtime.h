@@ -24,7 +24,7 @@ typedef struct {
 } ng_runtime_options_t;
 
 typedef struct {
-    const uint32_t *pixels;     /* 0xFFRRGGBB; valid until next frame/reset/unload */
+    const uint32_t *pixels;     /* 0xFFRRGGBB; valid until next frame/reset/restore/unload */
     unsigned width, height;
     size_t pitch;              /* bytes between rows */
     const int16_t *audio;      /* interleaved signed 16-bit stereo */
@@ -38,6 +38,14 @@ void ng_runtime_reset(void);
 /* Live AST gain only; soundtrack selection and geometry require a reload. */
 void ng_runtime_set_soundtrack_volume(unsigned volume);
 void ng_runtime_unload(void);  /* safe after errors and repeated calls */
+/* Frame-boundary snapshots. Fixed little-endian wire format, versioned and
+ * checked against the loaded ROM/BIOS, soundtrack and geometry. Invalid loads
+ * leave the running board untouched. Immutable ROMs/host pointers are excluded.
+ * Returns 0/-1; state_size is 0 without content. Buffers must not alias runtime
+ * memory. Valid only between runtime API calls, on the emulation thread. */
+size_t ng_runtime_state_size(void);
+int ng_runtime_serialize(void *data, size_t size);
+int ng_runtime_unserialize(const void *data, size_t size);
 void ng_runtime_counters(uint64_t *native_blocks, uint64_t *interpreted_instructions);
 
 #ifdef __cplusplus

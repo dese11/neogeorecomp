@@ -292,3 +292,41 @@ void audio_shutdown(void) {
     s_ring_head = s_ring_count = 0;
     s_use_bios_rom = 1;
 }
+
+#include "state.h"
+#include <limits.h>
+void ym2610_state(ng_state_t *s);
+void audio_state(ng_state_t *s) {
+    uint64_t cycles=ngs_number(s,(uint64_t)s_z.cyc,8);
+    ngs_require(s,cycles<=ULONG_MAX);
+    if (s->mode==NGS_READ && !s->error) s_z.cyc=(unsigned long)cycles;
+#define Z16(x) ngs_u16(s,&s_z.x)
+    Z16(pc); Z16(sp); Z16(ix); Z16(iy); Z16(mem_ptr);
+#undef Z16
+#define Z8(x) ngs_u8(s,&s_z.x)
+    Z8(a); Z8(b); Z8(c); Z8(d); Z8(e); Z8(h); Z8(l);
+    Z8(a_); Z8(b_); Z8(c_); Z8(d_); Z8(e_); Z8(h_); Z8(l_); Z8(f_); Z8(i); Z8(r);
+    Z8(iff_delay); Z8(int_data);
+#undef Z8
+    ngs_require(s,ngs_u8(s,&s_z.interrupt_mode)<=2);
+#define ZFLAG(x) do { uint8_t v=s_z.x; ngs_require(s,ngs_u8(s,&v)<=1); \
+    if (s->mode==NGS_READ && !s->error) s_z.x=v!=0; } while(0)
+    ZFLAG(sf); ZFLAG(zf); ZFLAG(yf); ZFLAG(hf); ZFLAG(xf); ZFLAG(pf); ZFLAG(nf); ZFLAG(cf);
+    ZFLAG(iff1); ZFLAG(iff2); ZFLAG(halted); ZFLAG(int_pending); ZFLAG(nmi_pending);
+#undef ZFLAG
+    ngs_bytes(s,s_ram,sizeof(s_ram));
+    for (int i=0;i<4;i++) ngs_require(s,ngs_u32(s,&s_bank[i])<=0x3fc000);
+    int bios=ngs_int(s,&s_use_bios_rom); ngs_require(s,bios>=0 && bios<=1);
+    ngs_u8(s,&s_cmd); ngs_u8(s,&s_reply); ngs_int(s,&s_ast_reply); ngs_u8(s,&s_ast_echo);
+    ngs_int(s,&s_nmi_enabled); ngs_int(s,&s_nmi_pending); ngs_int(s,&s_nmi_line);
+    ngs_require(s,ngs_i64(s,&s_z80_clock)>=0);
+    ngs_require(s,ngs_i64(s,&s_samples_done)>=0);
+    ngs_bytes(s,s_ym.addr,sizeof(s_ym.addr)); ngs_bytes(s,s_ym.regs,sizeof(s_ym.regs));
+    ngs_u8(s,&s_ym.ctrl); ngs_u8(s,&s_ym.status);
+    ngs_require(s,ngs_i64(s,&s_ym.ta_deadline)>=0); ngs_require(s,ngs_i64(s,&s_ym.tb_deadline)>=0);
+    ym2610_state(s);
+    /* The runtime drains the FIFO at every frame boundary. Old ring bytes and
+     * their circular index are presentation cache, not future machine state. */
+    ngs_require(s,s_ring_count==0);
+    if (s->mode==NGS_READ && !s->error) s_ring_head=s_ring_count=0;
+}

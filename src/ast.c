@@ -1,6 +1,7 @@
 /* Optional arranged music mixed into the existing YM2610 sample clock.
  * Packs are prepared locally from the user's disc, never embedded in code. */
 #include "ast.h"
+#include "state.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +17,8 @@ typedef struct {
 } track_t;
 static track_t s_tracks[256];
 static uint8_t s_native[256], s_args[256];
-static FILE *s_file;
+static FILE *s_file, *s_prepared;
+static uint64_t s_pack_identity, s_track_identity[256];
 static int s_enabled, s_track = -1;
 static unsigned s_volume, s_pending, s_owner;
 static uint64_t s_phase, s_fade_left, s_fade_total;
@@ -68,10 +70,12 @@ static int wav_info(track_t *t) {
 static void stop(void) {
     if (s_file) fclose(s_file);
     s_file=NULL; s_track=-1; s_phase=0; s_cache_count=0;
-    s_gain=65536; s_fade_left=s_fade_total=0;
+    s_gain=65536; s_fade_left=s_fade_total=0; s_fade_gain=0;
 }
 void ast_reset(void) { stop(); s_pending=s_owner=0; }
 void ast_close(void) {
+    ast_state_cancel(); s_pack_identity=0;
+    memset(s_track_identity,0,sizeof(s_track_identity));
     ast_reset(); s_enabled=0;
     memset(s_tracks,0,sizeof(s_tracks));
     memset(s_native,0,sizeof(s_native)); memset(s_args,0,sizeof(s_args));
@@ -79,6 +83,14 @@ void ast_close(void) {
 void ast_set_volume(unsigned volume) { if (volume<=100) s_volume=volume; }
 int ast_enabled(void) { return s_enabled; }
 unsigned ast_current_track(void) { return s_track<0 ? 0 : s_tracks[s_track].number; }
+
+uint64_t ast_identity(void) { return s_pack_identity; }
+static uint64_t file_identity(const char *path) {
+    FILE *f=fopen(path,"rb"); if (!f) return 0;
+    uint64_t h=NGS_HASH_INIT; uint8_t buf[65536]; size_t n;
+    while ((n=fread(buf,1,sizeof(buf),f))) h=ngs_hash64(h,buf,n);
+    int bad=ferror(f); fclose(f); return bad ? 0 : h;
+}
 
 int ast_open(const char *path, const char *game, const uint8_t *m1, size_t size, unsigned volume) {
     ast_close();
@@ -109,6 +121,10 @@ int ast_open(const char *path, const char *game, const uint8_t *m1, size_t size,
                 fprintf(stderr,"error: AST needs stereo PCM16 44100 Hz WAV: %s\n",t->file);
                 ok=0; break;
             }
+            for (unsigned i=0;i<command;i++)
+                if (!strcmp(s_tracks[i].file,t->file)) { s_track_identity[command]=s_track_identity[i]; break; }
+            if (!s_track_identity[command]) s_track_identity[command]=file_identity(t->file);
+            if (!s_track_identity[command]) { ok=0; break; }
             count++;
         } else if (!strcmp(kind,"native")) {
             if (s_tracks[command].number || s_native[command]) { ok=0; break; }
@@ -123,6 +139,16 @@ int ast_open(const char *path, const char *game, const uint8_t *m1, size_t size,
     if (!ok || !count) {
         fprintf(stderr,"error: invalid AST pack or incompatible sound ROM: %s\n",name);
         ast_close(); return -1;
+    }
+    s_pack_identity=NGS_HASH_INIT;
+    s_pack_identity=ngs_hash64(s_pack_identity,s_native,sizeof(s_native));
+    s_pack_identity=ngs_hash64(s_pack_identity,s_args,sizeof(s_args));
+    for (unsigned i=0;i<256;i++) {
+        uint8_t bytes[24]; ng_state_t state={bytes,sizeof(bytes),0,NGS_WRITE,0};
+        ngs_number(&state,s_tracks[i].number,4); ngs_number(&state,s_tracks[i].loop,4);
+        ngs_number(&state,s_tracks[i].frames,4); ngs_number(&state,s_tracks[i].offset,4);
+        ngs_number(&state,s_track_identity[i],8);
+        s_pack_identity=ngs_hash64(s_pack_identity,bytes,sizeof(bytes));
     }
     s_enabled=1; s_volume=volume;
     fprintf(stderr,"[ast] %u mapped music commands, volume %u%%\n",count,volume);
@@ -201,4 +227,36 @@ void ast_mix(int16_t *out, size_t frames) {
             if (!s_fade_left) stop();
         }
     }
+}
+
+void ast_state_cancel(void) { if (s_prepared) fclose(s_prepared); s_prepared=NULL; }
+void ast_state(ng_state_t *s) {
+    int old_track=s_track;
+    int track=ngs_int(s,&s_track);
+    unsigned pending=s_pending, owner=s_owner; uint32_t gain=s_gain, fade_gain=s_fade_gain;
+    uint64_t phase=s_phase, left=s_fade_left, total=s_fade_total;
+    pending=ngs_u32(s,&pending); owner=ngs_u32(s,&owner);
+    phase=ngs_u64(s,&phase); left=ngs_u64(s,&left); total=ngs_u64(s,&total);
+    gain=ngs_u32(s,&gain); fade_gain=ngs_u32(s,&fade_gain);
+    ngs_require(s,track>=-1 && track<256 && pending<=2 && owner<=255 && gain<=65536 && fade_gain<=65536);
+    ngs_require(s,left<=total && total<=14108444);
+    if (s->error) return;
+    if (track>=0) {
+        ngs_require(s,s_enabled && s_tracks[track].number && phase<=(uint64_t)s_tracks[track].frames*PHASE_RATE+PHASE_STEP);
+        if (s->mode==NGS_CHECK && !s->error && (track!=s_track || !s_file)) {
+            ast_state_cancel(); s_prepared=fopen(s_tracks[track].file,"rb");
+            ngs_require(s,s_prepared!=NULL);
+        }
+    } else ngs_require(s,phase==0 && left==0 && total==0);
+    if (s->mode==NGS_READ && !s->error) {
+        if (track!=old_track || (track>=0 && !s_file)) {
+            if (s_file) fclose(s_file);
+            s_file=s_prepared; s_prepared=NULL;
+        }
+        s_track=track; s_phase=phase; s_pending=pending; s_owner=owner;
+        s_fade_left=left; s_fade_total=total; s_gain=gain; s_fade_gain=fade_gain;
+        s_cache_count=0;
+    }
+    /* PCM files/metadata and host volume are outside the snapshot. The logical
+     * cursor, command parser and envelope are sufficient to reconstruct cache. */
 }

@@ -243,3 +243,17 @@ void bus_shutdown(void) {
     s_logging = 0;
     free(s_log); s_log = NULL; s_nlog = s_caplog = 0;
 }
+
+#include "state.h"
+
+void bus_state(ng_state_t *s) {
+    ngs_bytes(s,s_wram,sizeof(s_wram));
+    ngs_bytes(s,s_backup,sizeof(s_backup));
+    int bios=ngs_int(s,&s_bios_vectors), locked=ngs_int(s,&s_backup_locked);
+    ngs_require(s,bios>=0 && bios<=1 && locked>=0 && locked<=1);
+    uint32_t bank=ngs_u32(s,&s_bank);
+    ngs_require(s,bank<=0x700000 && !(bank&0xfffff));
+    if (s->mode==NGS_READ && !s->error) {
+        map_bank(); bus_select_bios_vectors(s_bios_vectors); bus_set_backup_lock(s_backup_locked);
+    }
+}

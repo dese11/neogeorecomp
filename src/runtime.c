@@ -2,6 +2,7 @@
 #include "ng_internal.h"
 #include "romload.h"
 #include "ast.h"
+#include "state.h"
 #include <neogeorecomp/bus.h>
 #include <neogeorecomp/runtime.h>
 #include <stdio.h>
@@ -15,7 +16,8 @@ static struct {
     const ng_game_t *game;
     uint8_t *prom, *bios, *sfix, *sm1, *lo, *crom, *srom, *m1;
     uint8_t *vrom[NG_MAX_PARTS];
-    int loaded, mvs;
+    int loaded, mvs, interp;
+    uint64_t identity;
 } s_board;
 
 void ng_runtime_unload(void) {
@@ -97,6 +99,18 @@ int ng_runtime_load(const ng_game_t *game, const ng_func_entry_t *funcs,
     ng_screen_w = width;
     if (game->patch) game->patch(s_board.prom, game->prom_size, width);
     s_board.mvs = !game->aes;
+    s_board.interp = o->interpreter_only || !nfuncs;
+    uint64_t identity=ngs_hash64(NGS_HASH_INIT,game->name,strlen(game->name));
+#define ID_REGION(ptr, size) do { \
+    uint8_t count[8]; ng_state_t id={count,sizeof(count),0,NGS_WRITE,0}; \
+    ngs_number(&id,(size),8); identity=ngs_hash64(identity,count,8); \
+    identity=ngs_hash64(identity,(ptr),(size)); } while(0)
+    ID_REGION(s_board.prom,game->prom_size); ID_REGION(s_board.bios,bios_sz);
+    ID_REGION(s_board.sfix,sfix_sz); ID_REGION(s_board.sm1,sm1_sz); ID_REGION(s_board.lo,lo_sz);
+    ID_REGION(s_board.crom,game->crom_size); ID_REGION(s_board.srom,srom_sz); ID_REGION(s_board.m1,m1_sz);
+    for (int i=0;i<nv;i++) ID_REGION(s_board.vrom[i],vsizes[i]);
+#undef ID_REGION
+    s_board.identity=identity;
     ng_board_t board = {s_board.prom, game->prom_size, s_board.bios, s_board.mvs};
     bus_init(&board);
     ng_cycles = ng_frame_start = 0;
@@ -158,4 +172,58 @@ int ng_runtime_run_frame(const ng_input_t *input, ng_runtime_frame_t *out) {
 void ng_runtime_counters(uint64_t *native, uint64_t *interpreted) {
     if (native) *native = exec_native_blocks;
     if (interpreted) *interpreted = exec_interp_instrs;
+}
+
+/* Wire version changes whenever any module's field order/meaning changes. */
+#define STATE_HEADER_SIZE 48
+#define STATE_VERSION 1
+static void machine_state(ng_state_t *s) {
+    int64_t cycles=ngs_i64(s,&ng_cycles), frame=ngs_i64(s,&ng_frame_start);
+    ngs_require(s,cycles>=0 && cycles<INT64_MAX/16 && frame>=0 && frame<=cycles &&
+                cycles-frame<=2048 && !(frame%NG_CLOCKS_PER_FRAME));
+    ngs_require(s,ngs_u8(s,&ng_irq_pending)<=7);
+    exec_state(s); bus_state(s); lspc_state(s); io_state(s); video_state(s); audio_state(s);
+    ast_state(s); /* Last: may prepare a new file handle without changing the board. */
+}
+size_t ng_runtime_state_size(void) {
+    if (!s_board.loaded) return 0;
+    ng_state_t s={NULL,SIZE_MAX,STATE_HEADER_SIZE,NGS_COUNT,0};
+    machine_state(&s);
+    return s.error ? 0 : s.pos;
+}
+int ng_runtime_serialize(void *data, size_t size) {
+    size_t needed=ng_runtime_state_size();
+    if (!data || !needed || size<needed || needed>UINT32_MAX) return -1;
+    ng_state_t s={data,needed,0,NGS_WRITE,0};
+    ngs_bytes(&s,"NGSTATE\0",8);
+    ngs_number(&s,STATE_VERSION,4); ngs_number(&s,needed,4);
+    ngs_number(&s,s_board.identity,8); ngs_number(&s,ast_identity(),8);
+    ngs_number(&s,ng_screen_w,4); ngs_number(&s,s_board.mvs|(s_board.interp<<1),4);
+    ngs_number(&s,0,4); ngs_number(&s,0,4);
+    machine_state(&s);
+    uint32_t crc=ngs_crc32((uint8_t *)data+STATE_HEADER_SIZE,needed-STATE_HEADER_SIZE);
+    ng_state_t header={data,needed,40,NGS_WRITE,0}; ngs_u32(&header,&crc);
+    return s.error || s.pos!=needed ? -1 : 0;
+}
+int ng_runtime_unserialize(const void *data, size_t size) {
+    size_t needed=ng_runtime_state_size();
+    if (!data || !needed || size<needed || memcmp(data,"NGSTATE\0",8)) return -1;
+    ng_state_t s={(uint8_t *)data,needed,8,NGS_CHECK,0};
+    uint64_t version=ngs_number(&s,0,4), length=ngs_number(&s,0,4);
+    uint64_t identity=ngs_number(&s,0,8), music=ngs_number(&s,0,8);
+    uint64_t width=ngs_number(&s,0,4), mode=ngs_number(&s,0,4);
+    uint32_t crc=(uint32_t)ngs_number(&s,0,4); uint64_t reserved=ngs_number(&s,0,4);
+    if (version!=STATE_VERSION || length!=needed || identity!=s_board.identity || music!=ast_identity() ||
+        width!=(unsigned)ng_screen_w || mode!=(unsigned)(s_board.mvs|(s_board.interp<<1)) || reserved ||
+        crc!=ngs_crc32((const uint8_t *)data+STATE_HEADER_SIZE,needed-STATE_HEADER_SIZE)) return -1;
+    ast_state_cancel();
+    machine_state(&s);
+    if (s.error || s.pos!=needed) { ast_state_cancel(); return -1; }
+    s.mode=NGS_READ; s.pos=STATE_HEADER_SIZE;
+    machine_state(&s);
+    ast_state_cancel();
+    if (s.error) return -1; /* No external I/O/allocation remains after validation. */
+    memset(s_fb,0,sizeof(s_fb)); memset(s_samples,0,sizeof(s_samples));
+    ng_next_event=ng_cycles;
+    return 0;
 }

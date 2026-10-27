@@ -10,6 +10,8 @@
 #include "ymfm_opn.h"
 #include <stdint.h>
 #include <stddef.h>
+#include "state.h"
+#include <new>
 
 namespace {
 
@@ -33,6 +35,8 @@ public:
 };
 
 neogeo_ym *s_chip;
+std::vector<uint8_t> s_state_bytes;
+size_t s_state_size;
 
 }
 
@@ -44,14 +48,37 @@ void ym2610_init(const uint8_t *const *vroms, const size_t *sizes, int n) {
     for (int i = 0; i < s_chip->nvrom; i++) { s_chip->vrom[i] = vroms[i]; s_chip->vsize[i] = sizes[i]; }
     s_chip->chip.set_fidelity(ymfm::OPN_FIDELITY_MED);
     s_chip->chip.reset();
+    ymfm::ymfm_saved_state save(s_state_bytes,true);
+    s_chip->chip.save_restore(save);
+    s_state_size=s_state_bytes.size();
 }
 
 void ym2610_shutdown(void) {
+    s_state_bytes.clear(); s_state_size=0;
     delete s_chip; s_chip = nullptr;
 }
 
 void ym2610_reset(void) {
     if (s_chip) s_chip->chip.reset();
+}
+
+void ym2610_state(ng_state_t *s) {
+    uint32_t expected=(uint32_t)s_state_size;
+    uint32_t size=ngs_u32(s,&expected);
+    ngs_require(s,s_chip && size==s_state_size);
+    if (s->error) return;
+    try {
+        if (s->mode==NGS_WRITE) {
+            ymfm::ymfm_saved_state save(s_state_bytes,true);
+            s_chip->chip.save_restore(save);
+            ngs_require(s,s_state_bytes.size()==s_state_size);
+        }
+        ngs_bytes(s,s_state_bytes.data(),s_state_size);
+        if (s->mode==NGS_READ && !s->error) {
+            ymfm::ymfm_saved_state restore(s_state_bytes,false);
+            s_chip->chip.save_restore(restore);
+        }
+    } catch (const std::bad_alloc &) { s->error=1; }
 }
 
 void ym2610_write(int port, uint8_t v) {
